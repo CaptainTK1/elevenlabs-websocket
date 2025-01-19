@@ -8,12 +8,18 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const fastify = Fastify({
-  logger: true
+  logger: true,
+  trustProxy: true
 });
 
 // Register plugins
+await fastify.register(websocketPlugin, {
+  options: {
+    maxPayload: 1048576, // 1MB
+    clientTracking: true
+  }
+});
 await fastify.register(formBodyPlugin);
-await fastify.register(websocketPlugin);
 
 // Get signed URL from ElevenLabs
 async function getSignedUrl(agentId, apiKey) {
@@ -41,7 +47,14 @@ fastify.get('/', async (request, reply) => {
 
 // Test WebSocket endpoint
 fastify.get('/test-ws', { websocket: true }, (connection, req) => {
-  fastify.log.info('Test WebSocket connection received');
+  fastify.log.info('Test WebSocket connection attempt', {
+    headers: req.headers,
+    url: req.url
+  });
+  
+  connection.socket.on('error', (error) => {
+    fastify.log.error('Test WebSocket error:', error);
+  });
   
   connection.socket.on('message', (message) => {
     fastify.log.info('Test message received:', message.toString());
