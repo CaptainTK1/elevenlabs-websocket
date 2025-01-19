@@ -98,90 +98,138 @@ fastify.get('/test-ws', { websocket: true }, (connection, req) => {
 });
 
 // WebSocket endpoint
-fastify.get('/media-stream', { websocket: true }, async (connection, req) => {
-  fastify.log.info('New Twilio connection attempt', { 
-    headers: req.headers,
-    query: req.query
-  });
-  
-  try {
-    const signedUrl = await getSignedUrl(
-      process.env.ELEVENLABS_AGENT_ID,
-      process.env.ELEVENLABS_API_KEY
-    );
+fastify.get('/media-stream', { 
+  websocket: true,
+  handler: async (connection, req) => {
+    fastify.log.info('New Twilio connection attempt', { 
+      headers: req.headers,
+      query: req.query,
+      url: req.url,
+      method: req.method,
+      protocol: req.protocol,
+      hostname: req.hostname,
+      ip: req.ip
+    });
     
-    fastify.log.info('Got signed URL from ElevenLabs');
+    let streamSid = null;
     
-    // Connect to ElevenLabs
-    const elevenlabs = new WebSocket(signedUrl);
-    
-    elevenlabs.on('open', () => {
-      fastify.log.info('Connected to ElevenLabs WebSocket');
+    connection.socket.on('error', (error) => {
+      fastify.log.error('Twilio WebSocket error:', error);
     });
 
-    elevenlabs.on('error', (error) => {
-      fastify.log.error('ElevenLabs WebSocket error:', error);
+    connection.socket.on('open', () => {
+      fastify.log.info('Twilio WebSocket connection opened');
     });
     
-    // Handle messages from ElevenLabs to Twilio
-    elevenlabs.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        fastify.log.info('Received message from ElevenLabs:', message.type);
-        
-        if (message.type === 'audio' && message.audio_event?.audio_base_64) {
-          connection.socket.send(JSON.stringify({
-            event: 'media',
-            media: {
-              payload: message.audio_event.audio_base_64
-            }
-          }));
-        } else if (message.type === 'error') {
-          fastify.log.error('ElevenLabs error:', message);
+    try {
+      // Send initial protocol message
+      connection.socket.send(JSON.stringify({
+        event: 'connected'
+      }));
+
+      const signedUrl = await getSignedUrl(
+        process.env.ELEVENLABS_AGENT_ID,
+        process.env.ELEVENLABS_API_KEY
+      );
+      
+      fastify.log.info('Got signed URL from ElevenLabs');
+      
+      // Connect to ElevenLabs
+      const elevenlabs = new WebSocket(signedUrl);
+      
+      elevenlabs.on('open', () => {
+        fastify.log.info('Connected to ElevenLabs WebSocket');
+        // Send start message to Twilio
+        connection.socket.send(JSON.stringify({
+          event: 'start',
+          protocol: 'websocket-media',
+          version: '1.0.0'
+        }));
+      });
+
+      elevenlabs.on('error', (error) => {
+        fastify.log.error('ElevenLabs WebSocket error:', error);
+      });
+      
+      // Handle messages from Twilio to ElevenLabs
+      connection.socket.on('message', (data) => {
+        try {
+          const message = JSON.parse(data.toString());
+          fastify.log.info('Received message from Twilio:', message);
+
+          if (message.event === 'start') {
+            streamSid = message.streamSid;
+            fastify.log.info('Stream started with SID:', streamSid);
+          }
+          else if (message.event === 'media' && message.media?.payload) {
+            elevenlabs.send(JSON.stringify({
+              user_audio_chunk: message.media.payload
+            }));
+          }
+          else if (message.event === 'stop') {
+            fastify.log.info('Stream stopped:', message);
+            elevenlabs.close();
+          }
+        } catch (error) {
+          fastify.log.error('Error processing Twilio message:', error);
         }
-      } catch (error) {
-        fastify.log.error('Error processing ElevenLabs message:', error);
-      }
-    });
-    
-    // Handle messages from Twilio to ElevenLabs
-    connection.socket.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        
-        if (message.event === 'media' && message.media?.payload) {
-          elevenlabs.send(JSON.stringify({
-            user_audio_chunk: message.media.payload
-          }));
+      });
+      
+      // Handle messages from ElevenLabs to Twilio
+      elevenlabs.on('message', (data) => {
+        try {
+          const message = JSON.parse(data.toString());
+          fastify.log.info('Received message from ElevenLabs:', message.type);
+          
+          if (message.type === 'audio' && message.audio_event?.audio_base_64) {
+            connection.socket.send(JSON.stringify({
+              event: 'media',
+              streamSid: streamSid,
+              media: {
+                payload: message.audio_event.audio_base_64
+              }
+            }));
+          } else if (message.type === 'error') {
+            fastify.log.error('ElevenLabs error:', message);
+          }
+        } catch (error) {
+          fastify.log.error('Error processing ElevenLabs message:', error);
         }
-      } catch (error) {
-        fastify.log.error('Error processing Twilio message:', error);
-      }
-    });
-    
-    // Handle WebSocket closure
-    connection.socket.on('close', () => {
-      fastify.log.info('Twilio connection closed');
-      elevenlabs.close();
-    });
-    
-    elevenlabs.on('close', () => {
-      fastify.log.info('ElevenLabs connection closed');
+      });
+      
+      // Handle WebSocket closure
+      connection.socket.on('close', () => {
+        fastify.log.info('Twilio connection closed');
+        elevenlabs.close();
+      });
+      
+      elevenlabs.on('close', () => {
+        fastify.log.info('ElevenLabs connection closed');
+        connection.socket.close();
+      });
+      
+    } catch (error) {
+      fastify.log.error('Error in WebSocket handler:', error);
       connection.socket.close();
-    });
-    
-  } catch (error) {
-    fastify.log.error('Error in WebSocket handler:', error);
-    connection.socket.close();
+    }
   }
 });
 
 // Start the server
 try {
   const port = process.env.PORT || 3000;
-  await fastify.listen({ port, host: '0.0.0.0' });
+  await fastify.listen({ 
+    port, 
+    host: '0.0.0.0',
+    backlog: 511
+  });
   console.log(`Server listening on port ${port}`);
+  fastify.log.info('Server configuration:', {
+    port,
+    address: '0.0.0.0',
+    websocketPath: '/media-stream'
+  });
 } catch (err) {
-  fastify.log.error(err);
+  fastify.log.error('Error starting server:', err);
   process.exit(1);
 } 
