@@ -196,7 +196,11 @@ fastify.get('/media-stream', {
               },
               user_audio_chunk: message.media.payload,
               optimize_streaming_latency: 4,
-              continue_conversation: true
+              continue_conversation: true,
+              input_settings: {
+                audio_format: "mulaw",
+                sample_rate: 8000
+              }
             }));
           }
           else if (message.event === 'stop') {
@@ -228,11 +232,20 @@ fastify.get('/media-stream', {
           
           if (message.type === 'audio' && message.audio_event?.audio_base_64) {
             fastify.log.info('Sending audio back to Twilio');
+            // Send mark event before audio
+            connection.socket.send(JSON.stringify({
+              event: 'mark',
+              streamSid: streamSid,
+              type: 'audio'
+            }));
+            // Send the audio data
             connection.socket.send(JSON.stringify({
               event: 'media',
               streamSid: streamSid,
               media: {
-                payload: message.audio_event.audio_base_64
+                track: 'outbound',
+                chunk: message.audio_event.audio_base_64,
+                timestamp: Date.now()
               }
             }));
           } else if (message.type === 'error') {
