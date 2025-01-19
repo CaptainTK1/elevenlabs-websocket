@@ -160,7 +160,11 @@ fastify.get('/media-stream', {
       connection.socket.on('message', (data) => {
         try {
           const message = JSON.parse(data.toString());
-          fastify.log.info('Received message from Twilio:', message);
+          if (message.event === 'media') {
+            fastify.log.info('Received audio from Twilio');
+          } else {
+            fastify.log.info('Received message from Twilio:', message);
+          }
 
           if (message.event === 'start') {
             streamSid = message.streamSid;
@@ -169,13 +173,9 @@ fastify.get('/media-stream', {
           else if (message.event === 'media' && message.media?.payload && isConnectedToElevenLabs) {
             fastify.log.info('Forwarding audio to ElevenLabs');
             elevenlabs.send(JSON.stringify({
-              text: "",  // Required for conversation
-              voice_settings: {
-                stability: 0.5,
-                similarity_boost: 0.5
-              },
-              user_audio_chunk: message.media.payload,  // Use user_audio_chunk instead of audio
-              optimize_streaming_latency: 4
+              audio: message.media.payload,
+              encoding: "mulaw",
+              sample_rate: 8000
             }));
           }
           else if (message.event === 'stop') {
@@ -191,23 +191,25 @@ fastify.get('/media-stream', {
       elevenlabs.on('message', (data) => {
         try {
           const message = JSON.parse(data.toString());
-          fastify.log.info('Received message from ElevenLabs:', {
-            type: message.type,
-            hasAudio: !!message.audio,
-            hasAudioEvent: !!message.audio_event
-          });
+          if (message.type === 'audio') {
+            fastify.log.info('Received audio from ElevenLabs');
+          } else {
+            fastify.log.info('Received message from ElevenLabs:', message);
+          }
           
-          if (message.type === 'audio' && message.audio) {
+          if (message.type === 'audio' && message.audio_event?.audio) {
             fastify.log.info('Sending audio back to Twilio');
             connection.socket.send(JSON.stringify({
               event: 'media',
               streamSid: streamSid,
               media: {
-                payload: message.audio
+                payload: message.audio_event.audio
               }
             }));
           } else if (message.type === 'error') {
             fastify.log.error('ElevenLabs error:', message);
+          } else {
+            fastify.log.info('Other message from ElevenLabs:', message);
           }
         } catch (error) {
           fastify.log.error('Error processing ElevenLabs message:', error);
