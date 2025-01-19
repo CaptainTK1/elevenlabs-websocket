@@ -129,12 +129,13 @@ fastify.get('/media-stream', {
       }));
       fastify.log.info('Sent connected event to Twilio');
 
+      // Get signed URL from ElevenLabs
       const signedUrl = await getSignedUrl(
         process.env.ELEVENLABS_AGENT_ID,
         process.env.ELEVENLABS_API_KEY
       );
       
-      fastify.log.info('Got signed URL from ElevenLabs:', signedUrl);
+      fastify.log.info('Got signed URL from ElevenLabs');
       
       // Connect to ElevenLabs
       const elevenlabs = new WebSocket(signedUrl);
@@ -142,20 +143,13 @@ fastify.get('/media-stream', {
       elevenlabs.on('open', () => {
         fastify.log.info('Connected to ElevenLabs WebSocket');
         isConnectedToElevenLabs = true;
-        // Send start message to Twilio
-        connection.socket.send(JSON.stringify({
-          event: 'start',
-          protocol: 'websocket-media',
-          version: '1.0.0'
-        }));
-        fastify.log.info('Sent start event to Twilio');
       });
 
       elevenlabs.on('error', (error) => {
         fastify.log.error('ElevenLabs WebSocket error:', error);
         isConnectedToElevenLabs = false;
       });
-      
+
       // Handle messages from Twilio to ElevenLabs
       connection.socket.on('message', (data) => {
         try {
@@ -169,24 +163,36 @@ fastify.get('/media-stream', {
           if (message.event === 'start') {
             streamSid = message.streamSid;
             fastify.log.info('Stream started with SID:', streamSid);
+            
+            // Send mark message to start the stream
+            connection.socket.send(JSON.stringify({
+              event: 'mark',
+              streamSid: streamSid
+            }));
           }
           else if (message.event === 'media' && message.media?.payload && isConnectedToElevenLabs) {
             fastify.log.info('Forwarding audio to ElevenLabs');
             elevenlabs.send(JSON.stringify({
-              audio: message.media.payload,
-              encoding: "mulaw",
-              sample_rate: 8000
+              text: "",
+              voice_settings: {
+                stability: 0.5,
+                similarity_boost: 0.5
+              },
+              user_audio_chunk: message.media.payload,
+              optimize_streaming_latency: 4
             }));
           }
           else if (message.event === 'stop') {
             fastify.log.info('Stream stopped:', message);
-            elevenlabs.close();
+            if (elevenlabs && elevenlabs.readyState === WebSocket.OPEN) {
+              elevenlabs.close();
+            }
           }
         } catch (error) {
           fastify.log.error('Error processing Twilio message:', error);
         }
       });
-      
+
       // Handle messages from ElevenLabs to Twilio
       elevenlabs.on('message', (data) => {
         try {
@@ -197,29 +203,27 @@ fastify.get('/media-stream', {
             fastify.log.info('Received message from ElevenLabs:', message);
           }
           
-          if (message.type === 'audio' && message.audio_event?.audio) {
+          if (message.type === 'audio' && message.audio_event?.audio_base_64) {
             fastify.log.info('Sending audio back to Twilio');
             connection.socket.send(JSON.stringify({
               event: 'media',
               streamSid: streamSid,
               media: {
-                payload: message.audio_event.audio
+                payload: message.audio_event.audio_base_64
               }
             }));
           } else if (message.type === 'error') {
             fastify.log.error('ElevenLabs error:', message);
-          } else {
-            fastify.log.info('Other message from ElevenLabs:', message);
           }
         } catch (error) {
           fastify.log.error('Error processing ElevenLabs message:', error);
         }
       });
-      
+
       // Handle WebSocket closure
       connection.socket.on('close', () => {
         fastify.log.info('Twilio connection closed');
-        if (isConnectedToElevenLabs) {
+        if (elevenlabs && elevenlabs.readyState === WebSocket.OPEN) {
           elevenlabs.close();
         }
       });
@@ -227,7 +231,9 @@ fastify.get('/media-stream', {
       elevenlabs.on('close', () => {
         fastify.log.info('ElevenLabs connection closed');
         isConnectedToElevenLabs = false;
-        connection.socket.close();
+        if (connection.socket.readyState === WebSocket.OPEN) {
+          connection.socket.close();
+        }
       });
       
     } catch (error) {
