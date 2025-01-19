@@ -8,9 +8,10 @@
   },
   "dependencies": {
     "@fastify/formbody": "^7.4.0",
-    "@fastify/websocket": "^8.2.0",
+    "@fastify/websocket": "^8.3.0",
     "dotenv": "^16.3.1",
-    "fastify": "^4.24.0",
-    "ws": "^8.14.2"
+    "fastify": "^4.25.2",
+    "pino-pretty": "^10.3.1",
+    "ws": "^8.16.0"
   }
 } 

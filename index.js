@@ -8,7 +8,12 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const fastify = Fastify({
-  logger: true,
+  logger: {
+    level: 'debug',
+    transport: {
+      target: 'pino-pretty'
+    }
+  },
   trustProxy: true
 });
 
@@ -23,7 +28,9 @@ await fastify.register(websocketPlugin, {
         secure: info.secure,
         req: {
           url: info.req.url,
-          headers: info.req.headers
+          headers: info.req.headers,
+          method: info.req.method,
+          rawHeaders: info.req.rawHeaders
         }
       });
       cb(true);
@@ -31,6 +38,18 @@ await fastify.register(websocketPlugin, {
   }
 });
 await fastify.register(formBodyPlugin);
+
+// Add raw request logging
+fastify.addHook('onRequest', (request, reply, done) => {
+  fastify.log.info('Incoming request', {
+    method: request.method,
+    url: request.url,
+    headers: request.headers,
+    protocol: request.protocol,
+    hostname: request.hostname
+  });
+  done();
+});
 
 // Get signed URL from ElevenLabs
 async function getSignedUrl(agentId, apiKey) {
