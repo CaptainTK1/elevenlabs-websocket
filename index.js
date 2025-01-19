@@ -139,6 +139,7 @@ fastify.get('/media-stream', {
       
       // Connect to ElevenLabs
       const elevenlabs = new WebSocket(signedUrl);
+      let conversationStarted = false;
       
       elevenlabs.on('open', () => {
         fastify.log.info('Connected to ElevenLabs WebSocket');
@@ -169,6 +170,21 @@ fastify.get('/media-stream', {
               event: 'mark',
               streamSid: streamSid
             }));
+
+            // Start the conversation with ElevenLabs if not started
+            if (!conversationStarted && isConnectedToElevenLabs) {
+              conversationStarted = true;
+              elevenlabs.send(JSON.stringify({
+                text: "",
+                voice_settings: {
+                  stability: 0.5,
+                  similarity_boost: 0.5
+                },
+                optimize_streaming_latency: 4,
+                start_conversation: true
+              }));
+              fastify.log.info('Started conversation with ElevenLabs');
+            }
           }
           else if (message.event === 'media' && message.media?.payload && isConnectedToElevenLabs) {
             fastify.log.info('Forwarding audio to ElevenLabs');
@@ -179,14 +195,21 @@ fastify.get('/media-stream', {
                 similarity_boost: 0.5
               },
               user_audio_chunk: message.media.payload,
-              optimize_streaming_latency: 4
+              optimize_streaming_latency: 4,
+              continue_conversation: true
             }));
           }
           else if (message.event === 'stop') {
             fastify.log.info('Stream stopped:', message);
             if (elevenlabs && elevenlabs.readyState === WebSocket.OPEN) {
+              // End the conversation properly
+              elevenlabs.send(JSON.stringify({
+                text: "",
+                end_conversation: true
+              }));
               elevenlabs.close();
             }
+            conversationStarted = false;
           }
         } catch (error) {
           fastify.log.error('Error processing Twilio message:', error);
