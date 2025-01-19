@@ -16,7 +16,18 @@ const fastify = Fastify({
 await fastify.register(websocketPlugin, {
   options: {
     maxPayload: 1048576, // 1MB
-    clientTracking: true
+    clientTracking: true,
+    verifyClient: (info, cb) => {
+      fastify.log.info('WebSocket verification attempt', {
+        origin: info.origin,
+        secure: info.secure,
+        req: {
+          url: info.req.url,
+          headers: info.req.headers
+        }
+      });
+      cb(true);
+    }
   }
 });
 await fastify.register(formBodyPlugin);
@@ -49,7 +60,12 @@ fastify.get('/', async (request, reply) => {
 fastify.get('/test-ws', { websocket: true }, (connection, req) => {
   fastify.log.info('Test WebSocket connection attempt', {
     headers: req.headers,
-    url: req.url
+    url: req.url,
+    protocol: req.protocol
+  });
+  
+  connection.socket.on('open', () => {
+    fastify.log.info('Test WebSocket connection opened');
   });
   
   connection.socket.on('error', (error) => {
