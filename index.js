@@ -41,7 +41,10 @@ fastify.get('/', async (request, reply) => {
 
 // WebSocket endpoint
 fastify.get('/media-stream', { websocket: true }, async (connection, req) => {
-  fastify.log.info('New Twilio connection');
+  fastify.log.info('New Twilio connection attempt', { 
+    headers: req.headers,
+    query: req.query
+  });
   
   try {
     const signedUrl = await getSignedUrl(
@@ -49,8 +52,18 @@ fastify.get('/media-stream', { websocket: true }, async (connection, req) => {
       process.env.ELEVENLABS_API_KEY
     );
     
+    fastify.log.info('Got signed URL from ElevenLabs');
+    
     // Connect to ElevenLabs
     const elevenlabs = new WebSocket(signedUrl);
+    
+    elevenlabs.on('open', () => {
+      fastify.log.info('Connected to ElevenLabs WebSocket');
+    });
+
+    elevenlabs.on('error', (error) => {
+      fastify.log.error('ElevenLabs WebSocket error:', error);
+    });
     
     // Handle messages from ElevenLabs to Twilio
     elevenlabs.on('message', (data) => {
