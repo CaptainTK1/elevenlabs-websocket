@@ -39,6 +39,16 @@ fastify.get('/', async (request, reply) => {
   return { status: 'ok' };
 });
 
+// Test WebSocket endpoint
+fastify.get('/test-ws', { websocket: true }, (connection, req) => {
+  fastify.log.info('Test WebSocket connection received');
+  
+  connection.socket.on('message', (message) => {
+    fastify.log.info('Test message received:', message.toString());
+    connection.socket.send('Server received: ' + message);
+  });
+});
+
 // WebSocket endpoint
 fastify.get('/media-stream', { websocket: true }, async (connection, req) => {
   fastify.log.info('New Twilio connection attempt', { 
