@@ -3,6 +3,10 @@ import websocketPlugin from '@fastify/websocket';
 import formBodyPlugin from '@fastify/formbody';
 import WebSocket from 'ws';
 import dotenv from 'dotenv';
+import ffmpeg from 'fluent-ffmpeg';
+import stream from 'stream';
+import { Readable } from 'stream';
+import { spawn } from 'child_process';
 
 // Load environment variables
 dotenv.config();
@@ -50,6 +54,56 @@ fastify.addHook('onRequest', (request, reply, done) => {
   });
   done();
 });
+
+// Function to convert audio using ffmpeg
+async function convertAudioToMulaw(inputBase64) {
+  return new Promise((resolve, reject) => {
+    // Create a buffer from base64 input
+    const inputBuffer = Buffer.from(inputBase64, 'base64');
+    
+    // Create readable stream from buffer
+    const inputStream = new Readable();
+    inputStream.push(inputBuffer);
+    inputStream.push(null);
+
+    // Create buffer to store output
+    const chunks = [];
+    
+    // Spawn ffmpeg process
+    const ffmpeg = spawn('ffmpeg', [
+      '-i', 'pipe:0',          // Input from pipe
+      '-f', 'mulaw',           // Output format mulaw
+      '-ar', '8000',           // Sample rate 8000 Hz
+      '-ac', '1',              // Mono audio
+      '-pipe:1'                // Output to pipe
+    ]);
+
+    // Handle input stream
+    inputStream.pipe(ffmpeg.stdin);
+
+    // Collect output data
+    ffmpeg.stdout.on('data', chunk => chunks.push(chunk));
+    
+    // Handle process completion
+    ffmpeg.on('close', code => {
+      if (code === 0) {
+        const outputBuffer = Buffer.concat(chunks);
+        resolve(outputBuffer.toString('base64'));
+      } else {
+        reject(new Error(`FFmpeg process exited with code ${code}`));
+      }
+    });
+
+    // Handle errors
+    ffmpeg.stderr.on('data', data => {
+      console.error(`FFmpeg stderr: ${data}`);
+    });
+
+    ffmpeg.on('error', err => {
+      reject(err);
+    });
+  });
+}
 
 // Get signed URL from ElevenLabs
 async function getSignedUrl(agentId, apiKey) {
@@ -221,7 +275,7 @@ fastify.get('/media-stream', {
       });
 
       // Handle messages from ElevenLabs to Twilio
-      elevenlabs.on('message', (data) => {
+      elevenlabs.on('message', async (data) => {
         try {
           const message = JSON.parse(data.toString());
           if (message.type === 'audio') {
@@ -231,15 +285,22 @@ fastify.get('/media-stream', {
           }
           
           if (message.type === 'audio' && message.audio_event?.audio_base_64) {
-            fastify.log.info('Sending audio back to Twilio');
-            // Send the audio data
-            connection.socket.send(JSON.stringify({
-              event: 'media',
-              streamSid: streamSid,
-              media: {
-                payload: message.audio_event.audio_base_64
-              }
-            }));
+            try {
+              fastify.log.info('Converting audio for Twilio');
+              const convertedAudio = await convertAudioToMulaw(message.audio_event.audio_base64);
+              
+              // Send the converted audio data
+              connection.socket.send(JSON.stringify({
+                event: 'media',
+                streamSid: streamSid,
+                media: {
+                  payload: convertedAudio
+                }
+              }));
+              fastify.log.info('Sent converted audio to Twilio');
+            } catch (error) {
+              fastify.log.error('Error converting audio:', error);
+            }
           } else if (message.type === 'conversation_initiation_metadata') {
             fastify.log.info('Received conversation initiation metadata');
           } else if (message.type === 'error') {
