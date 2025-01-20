@@ -287,7 +287,35 @@ fastify.get('/media-stream', {
           if (message.type === 'audio' && message.audio_event?.audio_base_64) {
             try {
               fastify.log.info('Converting audio for Twilio');
-              const convertedAudio = await convertAudioToMulaw(message.audio_event.audio_base64);
+              fastify.log.info('Audio input length:', message.audio_event.audio_base_64.length);
+              
+              // Use FFmpeg path from environment variable or fallback to default paths
+              const ffmpegPath = process.env.FFMPEG_PATH || '/usr/bin/ffmpeg';
+              fastify.log.info('Using FFmpeg path:', ffmpegPath);
+              
+              // Test FFmpeg availability
+              try {
+                const result = spawn(ffmpegPath, ['-version']);
+                let versionOutput = '';
+                
+                result.stdout.on('data', (data) => {
+                  versionOutput += data.toString();
+                });
+                
+                result.on('close', (code) => {
+                  if (code === 0) {
+                    fastify.log.info('FFmpeg version check successful:', versionOutput.split('\n')[0]);
+                  } else {
+                    fastify.log.error('FFmpeg version check failed with code:', code);
+                  }
+                });
+              } catch (e) {
+                fastify.log.error('Error checking FFmpeg:', e);
+                throw new Error(`FFmpeg not accessible at ${ffmpegPath}: ${e.message}`);
+              }
+
+              const convertedAudio = await convertAudioToMulaw(message.audio_event.audio_base_64, ffmpegPath);
+              fastify.log.info('Converted audio length:', convertedAudio.length);
               
               // Send the converted audio data
               connection.socket.send(JSON.stringify({
@@ -299,7 +327,15 @@ fastify.get('/media-stream', {
               }));
               fastify.log.info('Sent converted audio to Twilio');
             } catch (error) {
-              fastify.log.error('Error converting audio:', error);
+              fastify.log.error('Error converting audio:', {
+                error: error.message,
+                stack: error.stack,
+                command: error.cmd,
+                killed: error.killed,
+                code: error.code,
+                signal: error.signal,
+                path: process.env.FFMPEG_PATH
+              });
             }
           } else if (message.type === 'conversation_initiation_metadata') {
             fastify.log.info('Received conversation initiation metadata');
