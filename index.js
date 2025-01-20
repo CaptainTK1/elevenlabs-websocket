@@ -168,9 +168,7 @@ fastify.get('/media-stream', {
       connection.socket.on('message', (data) => {
         try {
           const message = JSON.parse(data.toString());
-          if (message.event === 'media') {
-            fastify.log.info('Received audio from Twilio');
-          } else {
+          if (message.event !== 'media') {
             fastify.log.info('Received message from Twilio:', message);
           }
 
@@ -200,7 +198,6 @@ fastify.get('/media-stream', {
             }
           }
           else if (message.event === 'media' && message.media?.payload && isConnectedToElevenLabs) {
-            fastify.log.info('Forwarding audio to ElevenLabs');
             elevenlabs.send(JSON.stringify({
               user_audio_chunk: Buffer.from(message.media.payload, 'base64').toString('base64'),
               optimize_streaming_latency: 4
