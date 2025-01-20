@@ -144,6 +144,19 @@ fastify.get('/media-stream', {
       elevenlabs.on('open', () => {
         fastify.log.info('Connected to ElevenLabs WebSocket');
         isConnectedToElevenLabs = true;
+
+        // Send initial configuration
+        const initialConfig = {
+          type: "conversation_initiation_client_data",
+          conversation_config_override: {
+            agent: {
+              prompt: { prompt: process.env.AGENT_PROMPT || "You are a helpful AI assistant" },
+              first_message: "Hello! How can I help you today?",
+            },
+          }
+        };
+        elevenlabs.send(JSON.stringify(initialConfig));
+        fastify.log.info('Sent initial configuration to ElevenLabs');
       });
 
       elevenlabs.on('error', (error) => {
@@ -189,18 +202,8 @@ fastify.get('/media-stream', {
           else if (message.event === 'media' && message.media?.payload && isConnectedToElevenLabs) {
             fastify.log.info('Forwarding audio to ElevenLabs');
             elevenlabs.send(JSON.stringify({
-              text: "",
-              voice_settings: {
-                stability: 0.5,
-                similarity_boost: 0.5
-              },
-              user_audio_chunk: message.media.payload,
-              optimize_streaming_latency: 4,
-              continue_conversation: true,
-              input_settings: {
-                audio_format: "mulaw",
-                sample_rate: 8000
-              }
+              user_audio_chunk: Buffer.from(message.media.payload, 'base64').toString('base64'),
+              optimize_streaming_latency: 4
             }));
           }
           else if (message.event === 'stop') {
@@ -232,22 +235,16 @@ fastify.get('/media-stream', {
           
           if (message.type === 'audio' && message.audio_event?.audio_base_64) {
             fastify.log.info('Sending audio back to Twilio');
-            // Send mark event before audio
-            connection.socket.send(JSON.stringify({
-              event: 'mark',
-              streamSid: streamSid,
-              type: 'audio'
-            }));
             // Send the audio data
             connection.socket.send(JSON.stringify({
               event: 'media',
               streamSid: streamSid,
               media: {
-                track: 'outbound',
-                chunk: message.audio_event.audio_base_64,
-                timestamp: Date.now()
+                payload: message.audio_event.audio_base_64
               }
             }));
+          } else if (message.type === 'conversation_initiation_metadata') {
+            fastify.log.info('Received conversation initiation metadata');
           } else if (message.type === 'error') {
             fastify.log.error('ElevenLabs error:', message);
           }
